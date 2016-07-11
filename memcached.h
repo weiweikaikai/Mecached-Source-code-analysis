@@ -149,17 +149,17 @@ typedef void (*ADD_STAT)(const char *key, const uint16_t klen,
  * Possible states of a connection.
  */
 enum conn_states {
-    conn_listening,  /**< the socket which listens for connections */
-    conn_new_cmd,    /**< Prepare connection for next command */
-    conn_waiting,    /**< waiting for a readable socket */
-    conn_read,       /**< reading in a command line */
-    conn_parse_cmd,  /**< try to parse a command from the input buffer */
-    conn_write,      /**< writing out a simple response */
-    conn_nread,      /**< reading in a fixed number of bytes */
-    conn_swallow,    /**< swallowing unnecessary bytes w/o storing */
-    conn_closing,    /**< closing this connection */
-    conn_mwrite,     /**< writing out many items sequentially */
-    conn_max_state   /**< Max state value (used for assertion) */
+    conn_listening,  /**< the socket which listens for connections  监听状态*/
+    conn_new_cmd,    /**< Prepare connection for next command 为新连接做一些准备*/
+    conn_waiting,    /**< waiting for a readable socket 等待读取一个数据包*/
+    conn_read,       /**< reading in a command line 读取网络数据*/
+    conn_parse_cmd,  /**< try to parse a command from the input buffer 解析缓冲区中的数据 主要是命令数据*/
+    conn_write,      /**< writing out a simple response 简单的回复数据*/
+    conn_nread,      /**< reading in a fixed number of bytes 读取固定字节大小的网络数据*/
+    conn_swallow,    /**< swallowing unnecessary bytes w/o storing  处理不需要的写缓冲区的数据*/
+    conn_closing,    /**< closing this connection  关闭连接*/
+    conn_mwrite,     /**< writing out many items sequentially  顺序的写多个item数据*/
+    conn_max_state   /**< Max state value (used for assertion) 最大状态,做断言使用*/
 };
 
 enum bin_substates {
@@ -371,7 +371,7 @@ typedef struct _stritem {
     union {
         uint64_t cas;
         char end;
-    } data[];
+    } data[];//真实数据信息
     /* if it_flags & ITEM_CAS we have 8 bytes CAS */
     /* then null-terminated key */
     /* then " flags length\r\n" (no terminating null) */

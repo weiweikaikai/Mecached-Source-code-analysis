@@ -124,7 +124,7 @@ void item_lock_global(void) {
 void item_unlock_global(void) {
     mutex_unlock(&item_global_lock);
 }
-
+//执行分段加锁  
 void item_lock(uint32_t hv) {
     uint8_t *lock_type = pthread_getspecific(item_lock_type_key);
     if (likely(*lock_type == ITEM_LOCK_GRANULAR)) {
@@ -356,7 +356,8 @@ static void setup_thread(LIBEVENT_THREAD *me) {
     }
 
     /* Listen for notifications from other threads
-	//创建管道读的libevent事件主要是读其他线程发过来的信息，事件的回调函数处理具体的业务信息， */
+	//创建管道读的libevent事件主要是读其他线程发过来的信息，事件的回调函数处理具体的业务信息， 
+	//子线程会在PIPE管道读上面建立libevent事件，事件回调函数是thread_libevent_process  */
     event_set(&me->notify_event, me->notify_receive_fd,
               EV_READ | EV_PERSIST, thread_libevent_process, me);
     event_base_set(me->base, &me->notify_event);//设置libevent实例  
@@ -428,13 +429,13 @@ static void thread_libevent_process(int fd, short which, void *arg) {
     CQ_ITEM *item;
     char buf[1];
 
-    if (read(fd, buf, 1) != 1)
+    if (read(fd, buf, 1) != 1)//从PIPE管道中读取一个字节的数据
         if (settings.verbose > 0)
             fprintf(stderr, "Can't read from libevent pipe\n");
 
     switch (buf[0]) {
-    case 'c':
-    item = cq_pop(me->new_conn_queue);
+    case 'c': //如果是C，则处理网络连接
+    item = cq_pop(me->new_conn_queue); //从连接队列中独处master线程投递的消息
 
     if (NULL != item) {
         /* 根据item对象，创建conn对象，该对象负责客户端与该工作线程之间的通信 */
@@ -491,19 +492,19 @@ void dispatch_conn_new(int sfd, enum conn_states init_state, int event_flags,
     /* 选择目标线程：轮询，平衡负载 */
     int tid = (last_thread + 1) % settings.num_threads;
 
-    LIBEVENT_THREAD *thread = threads + tid;
+    LIBEVENT_THREAD *thread = threads + tid; //thread数组存储了所有的工作线程
 
-    last_thread = tid;
+    last_thread = tid;//缓存这次线程的编号，下次待用
 
     /* item初始化 */
-    item->sfd = sfd;
+    item->sfd = sfd; //accept之后的描述符
     item->init_state = init_state;
     item->event_flags = event_flags;
     item->read_buffer_size = read_buffer_size;
     item->transport = transport;
 
     /* 将item添加至目标线程的连接队列中 */
-    cq_push(thread->new_conn_queue, item);
+    cq_push(thread->new_conn_queue, item); //投递item信息到worker线程的工作队列中
 
     MEMCACHED_CONN_DISPATCH(sfd, thread->thread_id);
     buf[0] = 'c';
@@ -541,14 +542,15 @@ item *item_alloc(char *key, size_t nkey, int flags, rel_time_t exptime, int nbyt
  */
 /*
  * 返回key所对应的item，如果过期了返回null
+ //根据key信息和key的长度信息读取数据 
  */
 item *item_get(const char *key, const size_t nkey) {
     item *it;
     uint32_t hv;
-    hv = hash(key, nkey, 0);
-    item_lock(hv);
-    it = do_item_get(key, nkey, hv);
-    item_unlock(hv);
+    hv = hash(key, nkey, 0);//获得分段锁信息，如果未进行扩容，则item的hash表是多个hash桶共用同一个锁，即是分段的锁  
+    item_lock(hv);//执行分段加锁  
+    it = do_item_get(key, nkey, hv);//执行get操作 
+    item_unlock(hv);//释放锁
     return it;
 }
 

@@ -566,51 +566,55 @@ static void conn_close(conn *c) {
  * This should only be called in between requests since it can wipe output
  * buffers!
  */
+ //缩小缓冲区
 static void conn_shrink(conn *c) {
     assert(c != NULL);
 
-    if (IS_UDP(c->transport))
+    if (IS_UDP(c->transport))//如果是UDP协议，不牵涉缓冲区管理  
         return;
-
+      //读缓冲区空间大小>READ_BUFFER_HIGHWAT && 已经读到的数据还没解析的数据小于 DATA_BUFFER_SIZE  
     if (c->rsize > READ_BUFFER_HIGHWAT && c->rbytes < DATA_BUFFER_SIZE) {
         char *newbuf;
 
         if (c->rcurr != c->rbuf)
-            memmove(c->rbuf, c->rcurr, (size_t)c->rbytes);
+            memmove(c->rbuf, c->rcurr, (size_t)c->rbytes);//目前数据是从rcurr开始的，移动数据到rbuf中
 
-        newbuf = (char *)realloc((void *)c->rbuf, DATA_BUFFER_SIZE);
+        newbuf = (char *)realloc((void *)c->rbuf, DATA_BUFFER_SIZE);//按DATA_BUFFER_SIZE扩大缓冲区 
 
         if (newbuf) {
-            c->rbuf = newbuf;
-            c->rsize = DATA_BUFFER_SIZE;
+            c->rbuf = newbuf;////更新读缓冲区  
+            c->rsize = DATA_BUFFER_SIZE;//更新读缓冲区大小  
         }
         /* TODO check other branch... */
         c->rcurr = c->rbuf;
     }
 
-    if (c->isize > ITEM_LIST_HIGHWAT) {
+    if (c->isize > ITEM_LIST_HIGHWAT) {		//需要写出的item的个数，也就是要发送给客户端的item的个数  
         item **newbuf = (item**) realloc((void *)c->ilist, ITEM_LIST_INITIAL * sizeof(c->ilist[0]));
+		//增大存放item的空间
         if (newbuf) {
-            c->ilist = newbuf;
-            c->isize = ITEM_LIST_INITIAL;
+            c->ilist = newbuf; //更新信息
+            c->isize = ITEM_LIST_INITIAL;//更新信息
         }
     /* TODO check error condition? */
     }
 
-    if (c->msgsize > MSG_LIST_HIGHWAT) {
+    if (c->msgsize > MSG_LIST_HIGHWAT) {//msghdr的个数，memcached发送消息是通过sendmsg批量发送的  
         struct msghdr *newbuf = (struct msghdr *) realloc((void *)c->msglist, MSG_LIST_INITIAL * sizeof(c->msglist[0]));
-        if (newbuf) {
-            c->msglist = newbuf;
-            c->msgsize = MSG_LIST_INITIAL;
+       //增大空间
+		if (newbuf) {
+            c->msglist = newbuf;//更新信息
+            c->msgsize = MSG_LIST_INITIAL;//更新信息
         }
     /* TODO check error condition? */
     }
 
-    if (c->iovsize > IOV_LIST_HIGHWAT) {
+    if (c->iovsize > IOV_LIST_HIGHWAT) {//msghdr里面iov的数量 
         struct iovec *newbuf = (struct iovec *) realloc((void *)c->iov, IOV_LIST_INITIAL * sizeof(c->iov[0]));
-        if (newbuf) {
-            c->iov = newbuf;
-            c->iovsize = IOV_LIST_INITIAL;
+         //增大空间
+		if (newbuf) {
+            c->iov = newbuf;//更新信息
+            c->iovsize = IOV_LIST_INITIAL;//更新信息
         }
     /* TODO check return value */
     }
@@ -2177,6 +2181,8 @@ static void process_bin_delete(conn *c) {
     }
 }
 
+//解析完一些数据之后，会进入到conn_nread的流程，也就是读取指定数目数据的过程，
+//这个过程主要是做具体的操作了，比如get，add，set操作。
 static void complete_nread_binary(conn *c) {
     assert(c != NULL);
     assert(c->cmd >= 0);
@@ -2191,10 +2197,10 @@ static void complete_nread_binary(conn *c) {
         }
         break;
     case bin_read_set_value:
-        complete_update_bin(c);
+        complete_update_bin(c);//执行Update操作  
         break;
     case bin_reading_get_key:
-        process_bin_get(c);
+        process_bin_get(c);//执行get操作 
         break;
     case bin_reading_touch_key:
         process_bin_touch(c);
@@ -2222,19 +2228,19 @@ static void complete_nread_binary(conn *c) {
         assert(0);
     }
 }
-
+//整理缓冲区
 static void reset_cmd_handler(conn *c) {
     c->cmd = -1;
     c->substate = bin_no_state;
-    if(c->item != NULL) {
-        item_remove(c->item);
+    if(c->item != NULL) { //还有item
+        item_remove(c->item); //删除item
         c->item = NULL;
     }
-    conn_shrink(c);
-    if (c->rbytes > 0) {
-        conn_set_state(c, conn_parse_cmd);
-    } else {
-        conn_set_state(c, conn_waiting);
+    conn_shrink(c); //整理收缩缓冲区
+    if (c->rbytes > 0) { //缓冲区还有数据
+        conn_set_state(c, conn_parse_cmd); //更新状态
+    } else {//如果没有数据
+        conn_set_state(c, conn_waiting); //进入等待状态，状态机没有数据要处理，就进入这个状态
     }
 }
 
@@ -3380,6 +3386,7 @@ static void process_command(conn *c, char *command) {
 
 /*
  * if we have a complete line in the buffer, process it.
+ //memcached支持二进制协议和文本协议  
  */
 static int try_read_command(conn *c) {
     assert(c != NULL);
@@ -3387,10 +3394,11 @@ static int try_read_command(conn *c) {
     assert(c->rbytes > 0);
 
     if (c->protocol == negotiating_prot || c->transport == udp_transport)  {
+		//二进制协议有标志，按标志进行区分
         if ((unsigned char)c->rbuf[0] == (unsigned char)PROTOCOL_BINARY_REQ) {
-            c->protocol = binary_prot;
+            c->protocol = binary_prot;//二进制协议 
         } else {
-            c->protocol = ascii_prot;
+            c->protocol = ascii_prot;//文本协议  
         }
 
         if (settings.verbose > 1) {
@@ -3398,24 +3406,25 @@ static int try_read_command(conn *c) {
                     prot_text(c->protocol));
         }
     }
-
+     //如果是二进制协议  
     if (c->protocol == binary_prot) {
         /* Do we have the complete packet header? */
+		 //二进制协议读取到的数据小于二进制协议的头部长度  
         if (c->rbytes < sizeof(c->binary_header)) {
             /* need more data! */
-            return 0;
+            return 0;     //返回继续读数据  
         } else {
 #ifdef NEED_ALIGN
-            if (((long)(c->rcurr)) % 8 != 0) {
+            if (((long)(c->rcurr)) % 8 != 0) { //如果需要对齐，则按8字节对齐，对齐能提高CPU读取的效率
                 /* must realign input buffer */
-                memmove(c->rbuf, c->rcurr, c->rbytes);
+                memmove(c->rbuf, c->rcurr, c->rbytes);//调整缓冲区  
                 c->rcurr = c->rbuf;
                 if (settings.verbose > 1) {
                     fprintf(stderr, "%d: Realign input buffer\n", c->sfd);
                 }
             }
 #endif
-            protocol_binary_request_header* req;
+            protocol_binary_request_header* req;//二进制协议头  
             req = (protocol_binary_request_header*)c->rcurr;
 
             if (settings.verbose > 1) {
@@ -3435,7 +3444,7 @@ static int try_read_command(conn *c) {
             c->binary_header.request.keylen = ntohs(req->request.keylen);
             c->binary_header.request.bodylen = ntohl(req->request.bodylen);
             c->binary_header.request.cas = ntohll(req->request.cas);
-
+                 //判断魔数是否合法，魔数用来防止TCP粘包  
             if (c->binary_header.request.magic != PROTOCOL_BINARY_REQ) {
                 if (settings.verbose) {
                     fprintf(stderr, "Invalid magic:  %x\n",
@@ -3456,13 +3465,13 @@ static int try_read_command(conn *c) {
             c->cmd = c->binary_header.request.opcode;
             c->keylen = c->binary_header.request.keylen;
             c->opaque = c->binary_header.request.opaque;
-            /* clear the returned cas value */
+            /* clear the returned cas value    //清除客户端传递的cas值  */
             c->cas = 0;
 
-            dispatch_bin_command(c);
+            dispatch_bin_command(c);//协议数据处理  
 
-            c->rbytes -= sizeof(c->binary_header);
-            c->rcurr += sizeof(c->binary_header);
+            c->rbytes -= sizeof(c->binary_header);//更新已经读取到的字节数据 
+            c->rcurr += sizeof(c->binary_header);//更新缓冲区的路标信息  
         }
     } else {
         char *el, *cont;
@@ -3521,25 +3530,25 @@ static enum try_read_result try_read_udp(conn *c) {
 
     c->request_addr_size = sizeof(c->request_addr);
     res = recvfrom(c->sfd, c->rbuf, c->rsize,
-                   0, &c->request_addr, &c->request_addr_size);
-    if (res > 8) {
+                   0, &c->request_addr, &c->request_addr_size);//执行UDP的网络读取
+    if (res > 8) {//UDP数据包大小大于8，已经有可能是业务数据包  
         unsigned char *buf = (unsigned char *)c->rbuf;
         pthread_mutex_lock(&c->thread->stats.mutex);
-        c->thread->stats.bytes_read += res;
+        c->thread->stats.bytes_read += res;/更新每个线程的统计数据  
         pthread_mutex_unlock(&c->thread->stats.mutex);
 
         /* Beginning of UDP packet is the request ID; save it. */
-        c->request_id = buf[0] * 256 + buf[1];
+        c->request_id = buf[0] * 256 + buf[1];//UDP为了防止丢包，增加了确认字段 
 
         /* If this is a multi-packet request, drop it. */
-        if (buf[4] != 0 || buf[5] != 1) {
+        if (buf[4] != 0 || buf[5] != 1) {//一些业务的特征信息判断  
             out_string(c, "SERVER_ERROR multi-packet request not supported");
             return READ_NO_DATA_RECEIVED;
         }
 
         /* Don't care about any of the rest of the header. */
         res -= 8;
-        memmove(c->rbuf, c->rbuf + 8, res);
+        memmove(c->rbuf, c->rbuf + 8, res);//调整缓冲区  
 
         c->rbytes = res;
         c->rcurr = c->rbuf;
@@ -3560,72 +3569,74 @@ static enum try_read_result try_read_udp(conn *c) {
  *
  * @return enum try_read_result
  */
+ //采用TCP协议，从网络读取数据  
 static enum try_read_result try_read_network(conn *c) {
     enum try_read_result gotdata = READ_NO_DATA_RECEIVED;
     int res;
     int num_allocs = 0;
     assert(c != NULL);
-
+//rcurr标记读缓冲区的开始位置，如果不在，通过memmove调整  
     if (c->rcurr != c->rbuf) {
         if (c->rbytes != 0) /* otherwise there's nothing to copy */
             memmove(c->rbuf, c->rcurr, c->rbytes);
-        c->rcurr = c->rbuf;
+        c->rcurr = c->rbuf;//rcurr指向读缓冲区起始位置  
     }
 
-    while (1) {
-        if (c->rbytes >= c->rsize) {
+    while (1) {//循环读取 
+        if (c->rbytes >= c->rsize) {//已经读取到的数据大于等于读缓冲区的大小  
             if (num_allocs == 4) {
                 return gotdata;
             }
             ++num_allocs;
-            char *new_rbuf = realloc(c->rbuf, c->rsize * 2);
-            if (!new_rbuf) {
+            char *new_rbuf = realloc(c->rbuf, c->rsize * 2);//按2倍扩容空间  
+            if (!new_rbuf) {//realloc发生错误，也就是申请内存失败  
                 if (settings.verbose > 0)
                     fprintf(stderr, "Couldn't realloc input buffer\n");
-                c->rbytes = 0; /* ignore what we read */
+                c->rbytes = 0; /* ignore what we read  //忽略已经读取到的数据 */
                 out_string(c, "SERVER_ERROR out of memory reading request");
-                c->write_and_go = conn_closing;
-                return READ_MEMORY_ERROR;
+                c->write_and_go = conn_closing;//下一个状态就是conn_closing状态 
+                return READ_MEMORY_ERROR;//返回错误 
             }
-            c->rcurr = c->rbuf = new_rbuf;
-            c->rsize *= 2;
+            c->rcurr = c->rbuf = new_rbuf;//读缓冲区指向新的缓冲区  
+            c->rsize *= 2;//读缓冲区的大小扩大2倍  
         }
 
-        int avail = c->rsize - c->rbytes;
-        res = read(c->sfd, c->rbuf + c->rbytes, avail);
-        if (res > 0) {
+        int avail = c->rsize - c->rbytes;//读缓冲区剩余空间  
+        res = read(c->sfd, c->rbuf + c->rbytes, avail);//执行网络读取，这个是非阻塞的读  
+        if (res > 0) {//如果读取到了数据  
             pthread_mutex_lock(&c->thread->stats.mutex);
-            c->thread->stats.bytes_read += res;
+            c->thread->stats.bytes_read += res;//更新线程的统计数据  
             pthread_mutex_unlock(&c->thread->stats.mutex);
-            gotdata = READ_DATA_RECEIVED;
-            c->rbytes += res;
-            if (res == avail) {
+            gotdata = READ_DATA_RECEIVED;//返回读取到数据的状态  
+            c->rbytes += res;//读取到的数据个数增加res  
+            if (res == avail) {//最多读取到avail个，如果已经读到了，则可以尝试继续读取 
                 continue;
-            } else {
+            } else {//否则，小于avail,表示已经没数据了，退出循环。 
                 break;
             }
         }
-        if (res == 0) {
+        if (res == 0) {//表示已经断开网络连接了  
             return READ_ERROR;
         }
-        if (res == -1) {
+        if (res == -1) {//因为是非阻塞的，所以会返回下面的两个错误码  
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 break;
             }
-            return READ_ERROR;
+            return READ_ERROR;//如果返回为负数，且不是上面两个数，则表示发生了其他错误，返回READ_ERROR  
         }
     }
     return gotdata;
 }
-
+//更新libevent状态，也就是删除libevent事件后，重新注册libevent事件  
 static bool update_event(conn *c, const int new_flags) {
     assert(c != NULL);
 
     struct event_base *base = c->event.ev_base;
     if (c->ev_flags == new_flags)
         return true;
-    if (event_del(&c->event) == -1) return false;
-    event_set(&c->event, c->sfd, new_flags, event_handler, (void *)c);
+    if (event_del(&c->event) == -1)//删除旧的事件 
+		return false;
+    event_set(&c->event, c->sfd, new_flags, event_handler, (void *)c);//注册新事件 
     event_base_set(base, &c->event);
     c->ev_flags = new_flags;
     if (event_add(&c->event, 0) == -1) return false;
@@ -3793,68 +3804,70 @@ static void drive_machine(conn *c) {
 
             stop = true;
             break;
-
+//从conn_new_cmd状态会进入conn_parse_cmd状态（如果有数据）或者conn_waiting（如果没有数据）状态，下面看看conn_waiting状态。
         case conn_waiting:
-            if (!update_event(c, EV_READ | EV_PERSIST)) {
+            if (!update_event(c, EV_READ | EV_PERSIST)) { //修改libvevent状态，读取数据
                 if (settings.verbose > 0)
                     fprintf(stderr, "Couldn't update event\n");
                 conn_set_state(c, conn_closing);
                 break;
             }
 
-            conn_set_state(c, conn_read);
+            conn_set_state(c, conn_read);//进入读数据状态
             stop = true;
             break;
-
+//conn_wating状态是在等待读取数据，conn_wating通过修改libevent事件（修改为读事件）
+//	之后就进入了conn_read状态，该状态就是从网络中读取数据
         case conn_read:
-            res = IS_UDP(c->transport) ? try_read_udp(c) : try_read_network(c);
+            res = IS_UDP(c->transport) ? try_read_udp(c) : try_read_network(c);//判断采用UDP协议还是TCP协议  
 
             switch (res) {
-            case READ_NO_DATA_RECEIVED:
-                conn_set_state(c, conn_waiting);
+            case READ_NO_DATA_RECEIVED://未读取到数据  
+                conn_set_state(c, conn_waiting);//继续等待  
                 break;
-            case READ_DATA_RECEIVED:
-                conn_set_state(c, conn_parse_cmd);
+            case READ_DATA_RECEIVED://读取数据  
+                conn_set_state(c, conn_parse_cmd);//开始解析数据 
                 break;
-            case READ_ERROR:
-                conn_set_state(c, conn_closing);
+            case READ_ERROR://读取发生错误  
+                conn_set_state(c, conn_closing);//关闭连接  
                 break;
-            case READ_MEMORY_ERROR: /* Failed to allocate more memory */
+            case READ_MEMORY_ERROR: /* Failed to allocate more memory  //申请内存空间错误，继续尝试  */
                 /* State already set by try_read_network */
                 break;
             }
             break;
-
+//从网络读取了数据之后，将会进入conn_parse_cmd状态，该状态是按协议来解析读取到的网络数据
         case conn_parse_cmd :
-            if (try_read_command(c) == 0) {
+			  //解析数据  
+            if (try_read_command(c) == 0) { //如果读取到的数据不够，我们继续等待，等读取到的数据够了，再进行解析 
                 /* wee need more data! */
                 conn_set_state(c, conn_waiting);
             }
 
             break;
-
+//子线程最初进入的状态就是conn_new_cmd状态，这个状态主要是做一些清理
         case conn_new_cmd:
             /* Only process nreqs at a time to avoid starving other
                connections */
 
-            --nreqs;
-            if (nreqs >= 0) {
-                reset_cmd_handler(c);
+            --nreqs; //全局变量，记录每个libevent实例处理的事件，通过初始启动参数配置  
+            if (nreqs >= 0) { //还可以处理请求
+                reset_cmd_handler(c); //整理缓冲区
             } else {
                 pthread_mutex_lock(&c->thread->stats.mutex);
-                c->thread->stats.conn_yields++;
+                c->thread->stats.conn_yields++; //更新统计数据
                 pthread_mutex_unlock(&c->thread->stats.mutex);
-                if (c->rbytes > 0) {
+                if (c->rbytes > 0) { //如果缓冲区有数据，则需要处理
                     /* We have already read in data into the input buffer,
                        so libevent will most likely not signal read events
                        on the socket (unless more data is available. As a
                        hack we should just put in a request to write data,
                        because that should be possible ;-)
                     */
-                    if (!update_event(c, EV_WRITE | EV_PERSIST)) {
+                    if (!update_event(c, EV_WRITE | EV_PERSIST)) {//更新libevent状态
                         if (settings.verbose > 0)
                             fprintf(stderr, "Couldn't update event\n");
-                        conn_set_state(c, conn_closing);
+                        conn_set_state(c, conn_closing); //关闭连接
                     }
                 }
                 stop = true;
@@ -5082,7 +5095,7 @@ slab_automove（是否自动移动各个slab，如果该选项打开，会有专
     }
 
     /** 10. 检查是否使用maxcore，如果是，则做相应的core file设置。 
-      *     core file 是一种特殊的文件，当程序发生异常退出时，该进程的整个内存将被镜像到文件中 
+      *  core file 是一种特殊的文件，当程序发生异常退出时，该进程的整个内存将被镜像到文件中 
       */
     if (maxcore != 0) {
         struct rlimit rlim_new;

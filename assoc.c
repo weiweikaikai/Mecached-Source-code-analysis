@@ -136,54 +136,57 @@ static item** _hashitem_before (const char *key, const size_t nkey, const uint32
     return pos;
 }
 
-/* grows the hashtable to the next power of 2. */
+/* grows the hashtable to the next power of 2.//按2倍容量扩容Hash表   */
 static void assoc_expand(void) {
-    old_hashtable = primary_hashtable;
+    old_hashtable = primary_hashtable;//old_hashtable指向主Hash表  
 
-    primary_hashtable = calloc(hashsize(hashpower + 1), sizeof(void *));
-    if (primary_hashtable) {
+    primary_hashtable = calloc(hashsize(hashpower + 1), sizeof(void *));//申请新的空间  
+    if (primary_hashtable) {//空间申请成功  
         if (settings.verbose > 1)
             fprintf(stderr, "Hash table expansion starting\n");
-        hashpower++;
-        expanding = true;
+        hashpower++;//hash等级+1  
+        expanding = true;//扩容标识打开
         expand_bucket = 0;
-        STATS_LOCK();
+        STATS_LOCK();//更新全局统计信息
         stats.hash_power_level = hashpower;
         stats.hash_bytes += hashsize(hashpower) * sizeof(void *);
         stats.hash_is_expanding = 1;
         STATS_UNLOCK();
-    } else {
+    } else {//空间申请失败
         primary_hashtable = old_hashtable;
         /* Bad news, but we can keep running. */
     }
 }
 
+//唤醒扩容线程
 static void assoc_start_expand(void) {
     if (started_expanding)
         return;
     started_expanding = true;
-    pthread_cond_signal(&maintenance_cond);
+    pthread_cond_signal(&maintenance_cond);//唤醒信号量
 }
 
-/* Note: this isn't an assoc_update.  The key must not already exist to call this */
+/* Note: this isn't an assoc_update.  The key must not already exist to call this
+//hash表中增加元素*/
 int assoc_insert(item *it, const uint32_t hv) {
     unsigned int oldbucket;
 
 //    assert(assoc_find(ITEM_key(it), it->nkey) == 0);  /* shouldn't have duplicately named things defined */
-
+     //如果已经进行扩容且目前进行扩容还没到需要插入元素的桶，则将元素添加到旧桶中  
     if (expanding &&
         (oldbucket = (hv & hashmask(hashpower - 1))) >= expand_bucket)
     {
         it->h_next = old_hashtable[oldbucket];
         old_hashtable[oldbucket] = it;
-    } else {
-        it->h_next = primary_hashtable[hv & hashmask(hashpower)];
+    } else {//如果没扩容，或者扩容已经到了新的桶中，则添加元素到新表中 
+        it->h_next = primary_hashtable[hv & hashmask(hashpower)];//添加元素
         primary_hashtable[hv & hashmask(hashpower)] = it;
     }
 
-    hash_items++;
+    hash_items++;//元素数目+1  
+	    //还没开始扩容，且表中元素个数已经超过Hash表容量的1.5倍  
     if (! expanding && hash_items > (hashsize(hashpower) * 3) / 2) {
-        assoc_start_expand();
+        assoc_start_expand();//唤醒扩容线程  
     }
 
     MEMCACHED_ASSOC_INSERT(ITEM_key(it), it->nkey, hash_items);
@@ -216,35 +219,37 @@ static volatile int do_run_maintenance_thread = 1;
 #define DEFAULT_HASH_BULK_MOVE 1
 int hash_bulk_move = DEFAULT_HASH_BULK_MOVE;
 
+//启动扩容线程，扩容线程在main函数中会启动，启动运行一遍之后会阻塞在条件变量maintenance_cond上面，
+//插入元素超过规定，唤醒条件变量  
 static void *assoc_maintenance_thread(void *arg) {
-
+    //do_run_maintenance_thread的值为1，即该线程持续运行
     while (do_run_maintenance_thread) {
         int ii = 0;
 
         /* Lock the cache, and bulk move multiple buckets to the new
          * hash table. */
-        item_lock_global();
-        mutex_lock(&cache_lock);
-
+        item_lock_global();//加Hash表的全局锁  
+        mutex_lock(&cache_lock);//加cache_lock锁  
+           //执行扩容时，每次按hash_bulk_move个桶来扩容  
         for (ii = 0; ii < hash_bulk_move && expanding; ++ii) {
             item *it, *next;
             int bucket;
-
+              //老表每次移动一个桶中的一个元素  
             for (it = old_hashtable[expand_bucket]; NULL != it; it = next) {
-                next = it->h_next;
+                next = it->h_next;//要移动的下一个元素 
 
-                bucket = hash(ITEM_key(it), it->nkey, 0) & hashmask(hashpower);
-                it->h_next = primary_hashtable[bucket];
+                bucket = hash(ITEM_key(it), it->nkey, 0) & hashmask(hashpower);//按新的Hash规则进行定位 
+                it->h_next = primary_hashtable[bucket];//挂载到新的Hash表中  
                 primary_hashtable[bucket] = it;
             }
 
-            old_hashtable[expand_bucket] = NULL;
+            old_hashtable[expand_bucket] = NULL;//旧表中的这个Hash桶已经按新规则完成了扩容  
 
-            expand_bucket++;
-            if (expand_bucket == hashsize(hashpower - 1)) {
-                expanding = false;
-                free(old_hashtable);
-                STATS_LOCK();
+            expand_bucket++;//老表中的桶计数+1
+            if (expand_bucket == hashsize(hashpower - 1)) {//hash表扩容结束,expand_bucket从0开始,一直递增 
+                expanding = false;//修改扩容标志  
+                free(old_hashtable);//释放老的表结构  
+                STATS_LOCK();//更新一些统计信息  
                 stats.hash_bytes -= hashsize(hashpower - 1) * sizeof(void *);
                 stats.hash_is_expanding = 0;
                 STATS_UNLOCK();
@@ -253,23 +258,24 @@ static void *assoc_maintenance_thread(void *arg) {
             }
         }
 
-        mutex_unlock(&cache_lock);
-        item_unlock_global();
+        mutex_unlock(&cache_lock);//释放cache_lock锁  
+        item_unlock_global();//释放Hash表的全局锁  
 
-        if (!expanding) {
-            /* finished expanding. tell all threads to use fine-grained locks */
+        if (!expanding) {//完成扩容
+            /* finished expanding. tell all threads to use fine-grained locks 
+			 //修改Hash表的锁类型，此时锁类型更新为分段锁，默认是分段锁，在进行扩容时，改为全局锁  */
             switch_item_lock_type(ITEM_LOCK_GRANULAR);
-            slabs_rebalancer_resume();
+            slabs_rebalancer_resume();//释放用于扩容的锁  
             /* We are done expanding.. just wait for next invocation */
-            mutex_lock(&cache_lock);
-            started_expanding = false;
-            pthread_cond_wait(&maintenance_cond, &cache_lock);
+            mutex_lock(&cache_lock);//加cache_lock锁，保护条件变量 
+            started_expanding = false;//修改扩容标识  
+            pthread_cond_wait(&maintenance_cond, &cache_lock); //阻塞扩容线程  
             /* Before doing anything, tell threads to use a global lock */
             mutex_unlock(&cache_lock);
-            slabs_rebalancer_pause();
-            switch_item_lock_type(ITEM_LOCK_GLOBAL);
-            mutex_lock(&cache_lock);
-            assoc_expand();
+            slabs_rebalancer_pause();//加用于扩容的锁
+            switch_item_lock_type(ITEM_LOCK_GLOBAL);//修改锁类型为全局锁 
+            mutex_lock(&cache_lock);//临时用来实现临界区  
+            assoc_expand();//执行扩容
             mutex_unlock(&cache_lock);
         }
     }
